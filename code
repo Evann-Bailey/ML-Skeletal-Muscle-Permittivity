@@ -1,0 +1,169 @@
+import os
+os.environ["SCIPY_ARRAY_API"] = "1"
+
+import scipy
+import sklearn
+# your other imports and code here
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, confusion_matrix
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from lightgbm import LGBMClassifier
+from sklearn.svm import SVC
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from imblearn.over_sampling import SMOTE
+from collections import defaultdict
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# === 1. Load data ===
+ccd = pd.read_csv(r"C:\Users\16156\OneDrive\Attachments\df_new_finalPerm.csv")
+ccd.rename(columns=lambda x: x.lower(), inplace=True)
+
+
+# === 3. Prepare final dataset ===
+
+
+# Drop columns not to be used as features
+X = ccd.drop(columns=['label'])
+
+# Target variable
+y = ccd['label']
+
+
+# === 4. Train-test split (80-20 stratified) ===
+# You should perform 5 fold cross validation if your dataset is small
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
+
+# === 5. Scale and balance data ===
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+X_train_res, y_train_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
+
+# === 6. Define models and hyperparameters ===
+models_with_grids = {
+        "LR": (
+        LogisticRegression(solver="liblinear"),
+        {
+            "C": [0.01, 0.1, 1, 10],
+            "class_weight": ["balanced"]
+        }
+    ),
+    
+    "KNN": (
+        KNeighborsClassifier(),
+        {
+            "n_neighbors": [3, 5, 7],
+            "weights": ["uniform", "distance"],
+            "p": [1, 2]  # 1=Manhattan, 2=Euclidean
+        }
+    ),
+    
+    "SVM_Linear": (
+        SVC(kernel="linear", probability=True),
+        {
+            "C": [0.01, 0.1, 1, 10],
+            "class_weight": ["balanced"]
+        }
+    ),
+    
+    "SVM_RBF": (
+        SVC(kernel="rbf", probability=True),
+        {
+            "C": [0.1, 1, 10],
+            "gamma": ["scale", 0.01, 0.1],
+            "class_weight": ["balanced"]
+        }
+    ),
+    "XGB": (
+        XGBClassifier(use_label_encoder=False, eval_metric="logloss", random_state=42),
+        {
+            "n_estimators": [100, 200, 500],
+            "learning_rate": [0.01, 0.05, 0.1],
+            "max_depth": [3, 6, 10],
+            "subsample": [0.6, 0.8, 1.0],
+            "colsample_bytree": [0.6, 0.8, 1.0],
+            "gamma": [0, 0.1, 0.3],
+            "reg_alpha": [0, 0.1, 1],
+            "reg_lambda": [1, 1.5, 2]
+        }
+    )
+}
+
+# === 7. Train and evaluate ===
+results = []
+best_params = {}
+best_models= {}
+
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+
+for name, model in best_models.items():
+    y_pred = model.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+    disp.plot(cmap='Blues', values_format='d')
+    plt.title(f"Confusion Matrix - {name}")
+    plt.tight_layout()
+    plt.show()
+
+
+for name, (model, param_grid) in models_with_grids.items():
+    print(f"🔍 Training {name}...")
+    grid = GridSearchCV(model, param_grid, cv=StratifiedKFold(n_splits=3), scoring="f1", n_jobs=-1)
+    grid.fit(X_train_res, y_train_res)
+
+    best_model = grid.best_estimator_
+    y_pred = best_model.predict(X_test)
+
+    if hasattr(best_model, "predict_proba"):
+        y_proba = best_model.predict_proba(X_test)[:, 1]
+    else:
+        y_proba = best_model.decision_function(X_test)
+
+    results.append({
+        "Model": name,
+        "Accuracy": accuracy_score(y_test, y_pred) * 100,
+        "F1 Score": f1_score(y_test, y_pred) * 100,
+        "Precision": precision_score(y_test, y_pred) * 100,
+        "Recall": recall_score(y_test, y_pred) * 100,
+        "ROC AUC": roc_auc_score(y_test, y_proba) * 100
+    })
+
+    best_params[name] = grid.best_params_
+    best_models[name] = best_model
+
+# === 8. Display summary ===
+results_df = pd.DataFrame(results).sort_values("F1 Score", ascending=False)
+print("\n📊 Test Set Results:")
+print(results_df.round(2))
+
+print("\n🔧 Best Hyperparameters:")
+for model, params in best_params.items():
+    print(f"{model}: {params}")
+
+results_df.to_csv("model_resultsparametersadjust.csv", index=False)
+
+
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+
+for name, model in best_models.items():
+    y_pred = model.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+    disp.plot(cmap='Blues', values_format='d')
+    plt.title(f"Confusion Matrix - {name}")
+    plt.tight_layout()
+    plt.show()
